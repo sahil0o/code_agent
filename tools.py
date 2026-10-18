@@ -6,7 +6,7 @@ import os
 WORKSPACE = Path(os.environ.get("AGENT_WORKSPACE", Path(__file__).parent / "playground")).resolve()   # the agent can only see inside this folder
 MAX_RESULT_CHARS = 8000                     # cap tool output so one result can't flood the context
 MAX_MATCHES = 50
-
+READ_CHUNK_CHARS = 7000                     # how much of a file one read_file call returns
 
 # ---------- Safety helper shared by every tool ----------
 def resolve_in_workspace(path):
@@ -35,11 +35,36 @@ def list_dir(path="."):
     return "\n".join(entries) or "(empty folder)"
 
 
-def read_file(path):
+def read_file(path, start_line=1, end_line=None):
     file = resolve_in_workspace(path)
     if not file.is_file():
         raise ValueError(f"'{path}' is not a file. Use list_dir to see which files exist.")
-    return file.read_text()
+
+    lines = file.read_text().splitlines()
+    total = len(lines)
+    if total == 0:
+        return "(empty file)"
+    start_line = int(start_line)
+    if not 1 <= start_line <= total:
+        raise ValueError(f"start_line must be between 1 and {total}.")
+    last_wanted = total if end_line is None else min(int(end_line), total)
+
+    # Add line numbers, stopping before the chunk gets too big
+    output, size, line_no = [], 0, start_line
+    while line_no <= last_wanted:
+        numbered = f"{line_no:>4} | {lines[line_no - 1]}"
+        if output and size + len(numbered) > READ_CHUNK_CHARS:
+            break
+        output.append(numbered)
+        size += len(numbered) + 1
+        line_no += 1
+
+    text = "\n".join(output)
+    last_shown = line_no - 1
+    if last_shown < total:
+        text += (f"\n\n[Showing lines {start_line}-{last_shown} of {total}. "
+                 f"Call read_file with start_line={last_shown + 1} to read more.]")
+    return text
 
 
 def search(query, path="."):
@@ -90,11 +115,15 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the full contents of a file in the project.",
+            "description": "Read a file in the project. Returns numbered lines like '  12 | code'. "
+                           "Long files come in parts: the result says which start_line to use for the next part. "
+                           "To jump to a specific place, find its line number with search first.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path relative to the project root, e.g. 'inventory.py'."}
+                    "path": {"type": "string", "description": "File path relative to the project root, e.g. 'inventory.py'."},
+                    "start_line": {"type": "integer", "description": "Line number to start reading from. Defaults to 1."},
+                    "end_line": {"type": "integer", "description": "Optional last line to read. Defaults to reading as much as fits."},
                 },
                 "required": ["path"],
             },
