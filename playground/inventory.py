@@ -30,7 +30,7 @@ class Inventory:
 
     def total_value(self):
         """Return the total value of all stock (price x quantity for every item)."""
-        return sum(item.price for item in self.items.values())
+        return sum(item.price * item.quantity for item in self.items.values())
 
     def low_stock(self, threshold=5):
         """Return names of items whose quantity is at or below `threshold`."""

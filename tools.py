@@ -37,7 +37,7 @@ def list_dir(path="."):
     return "\n".join(entries) or "(empty folder)"
 
 
-def read_file(path, start_line=1, end_line=None):
+def read_file(path, line_start=1, line_end=None):
     file = resolve_in_workspace(path)
     if not file.is_file():
         raise ValueError(f"'{path}' is not a file. Use list_dir to see which files exist.")
@@ -46,13 +46,13 @@ def read_file(path, start_line=1, end_line=None):
     total = len(lines)
     if total == 0:
         return "(empty file)"
-    start_line = int(start_line)
-    if not 1 <= start_line <= total:
-        raise ValueError(f"start_line must be between 1 and {total}.")
-    last_wanted = total if end_line is None else min(int(end_line), total)
+    line_start = int(line_start)
+    if not 1 <= line_start <= total:
+        raise ValueError(f"line_start must be between 1 and {total}.")
+    last_wanted = total if line_end is None else min(int(line_end), total)
 
     # Add line numbers, stopping before the chunk gets too big
-    output, size, line_no = [], 0, start_line
+    output, size, line_no = [], 0, line_start
     while line_no <= last_wanted:
         numbered = f"{line_no:>4} | {lines[line_no - 1]}"
         if output and size + len(numbered) > READ_CHUNK_CHARS:
@@ -64,8 +64,8 @@ def read_file(path, start_line=1, end_line=None):
     text = "\n".join(output)
     last_shown = line_no - 1
     if last_shown < total:
-        text += (f"\n\n[Showing lines {start_line}-{last_shown} of {total}. "
-                 f"Call read_file with start_line={last_shown + 1} to read more.]")
+        text += (f"\n\n[Showing lines {line_start}-{last_shown} of {total}. "
+                 f"Call read_file with line_start={last_shown + 1} to read more.]")
     return text
 
 
@@ -163,14 +163,14 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "read_file",
             "description": "Read a file in the project. Returns numbered lines like '  12 | code'. "
-                           "Long files come in parts: the result says which start_line to use for the next part. "
+                           "Long files come in parts: the result says which line_start to use for the next part. "
                            "To jump to a specific place, find its line number with search first.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File path relative to the project root, e.g. 'inventory.py'."},
-                    "start_line": {"type": "integer", "description": "Line number to start reading from. Defaults to 1."},
-                    "end_line": {"type": "integer", "description": "Optional last line to read. Defaults to reading as much as fits."},
+                    "line_start": {"type": "integer", "description": "Line number to start reading from. Defaults to 1."},
+                    "line_end": {"type": "integer", "description": "Optional last line to read. Defaults to reading as much as fits."},
                 },
                 "required": ["path"],
             },
