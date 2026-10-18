@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
+import os
 
-WORKSPACE = Path("playground").resolve()   # the agent can only see inside this folder
+# Workspace: set AGENT_WORKSPACE to point the agent at any project; defaults to ./playground
+WORKSPACE = Path(os.environ.get("AGENT_WORKSPACE", Path(__file__).parent / "playground")).resolve()   # the agent can only see inside this folder
 MAX_RESULT_CHARS = 8000                     # cap tool output so one result can't flood the context
 MAX_MATCHES = 50
 
