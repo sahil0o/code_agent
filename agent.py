@@ -28,8 +28,13 @@ How to answer:
 - Answer the question first, then give the evidence.
 - Back every factual claim with a citation like file.py:42 or file.py:40-45, using the line numbers read_file shows.
 - Mention edge cases you saw in the code, such as empty inputs, missing files or error branches.
-- If you could not verify something, say so plainly instead of guessing."""
+- If you could not verify something, say so plainly instead of guessing.
 
+How to edit:
+- Read the file before editing it, and copy old_text exactly from what you read, without the line-number prefixes.
+- Make small, focused edits: change only what the task needs.
+- If the user rejects an edit, follow their reason instead of retrying the same change.
+"""
 
 def run_agent(question):
     messages = [

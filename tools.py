@@ -1,4 +1,6 @@
 import json
+import difflib
+import re
 from pathlib import Path
 import os
 
@@ -85,13 +87,58 @@ def search(query, path="."):
                     return "\n".join(matches) + f"\n...(stopped at {MAX_MATCHES} matches)"
     return "\n".join(matches) or f"No matches for '{query}'."
 
+def ask_approval(diff_text):
+    """Show the proposed change and ask the human. Returns (approved, reason)."""
+    print("\n" + "=" * 60)
+    print(diff_text)
+    print("=" * 60)
+    answer = input("Apply this edit? [y = yes / anything else = no, optionally with a reason]: ").strip()
+    if answer.lower() in ("y", "yes"):
+        return True, ""
+    return False, answer
+
+def edit_file(path, old_text, new_text):
+    file = resolve_in_workspace(path)
+    if not file.is_file():
+        raise ValueError(f"'{path}' is not a file. Use list_dir to see which files exist.")
+    if file.suffix == ".ipynb":
+        raise ValueError("Editing notebooks is not supported yet.")
+    if old_text == new_text:
+        raise ValueError("old_text and new_text are identical, so there is nothing to change.")
+
+    content = file.read_text()
+    count = content.count(old_text)
+    if count == 0:
+        hint = ""
+        if re.search(r"^\s*\d+ \| ", old_text, re.MULTILINE):
+            hint = " Remove the line-number prefixes (like '  12 | ') that read_file adds; they are not in the file."
+        raise ValueError(f"old_text was not found in '{path}'. It must match the file exactly, "
+                         f"including spaces and indentation. Read the file again and copy the text exactly.{hint}")
+    if count > 1:
+        raise ValueError(f"old_text appears {count} times in '{path}'. Include more surrounding lines "
+                         f"so it matches exactly one place.")
+
+    new_content = content.replace(old_text, new_text, 1)
+    diff = "".join(difflib.unified_diff(
+        content.splitlines(keepends=True), new_content.splitlines(keepends=True),
+        fromfile=f"a/{path}", tofile=f"b/{path}",
+    ))
+
+    approved, reason = ask_approval(diff)
+    if not approved:
+        return f"The user rejected this edit. Reason: {reason or 'none given'}. Do not retry the same edit."
+
+    file.write_text(new_content)
+    return f"Edit applied to '{path}'.\n{diff}"
 
 # ---------- Name -> function, so the loop can look tools up ----------
 TOOLS = {
     "list_dir": list_dir,
     "read_file": read_file,
     "search": search,
+    "edit_file": edit_file,
 }
+
 
 
 # ---------- The descriptions the model sees ----------
@@ -143,6 +190,26 @@ TOOL_SCHEMAS = [
                     "path": {"type": "string", "description": "Optional folder or file to search in. Defaults to the whole project."},
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "Change a file by replacing one exact piece of text with new text. "
+                           "old_text must appear exactly once in the file, copied exactly as it is in the file "
+                           "(same spaces and indentation, WITHOUT the line-number prefixes read_file shows). "
+                           "Include a few surrounding lines if the text is not unique. "
+                           "Always read the file before editing it. The user must approve every edit.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path relative to the project root."},
+                    "old_text": {"type": "string", "description": "The exact text to replace."},
+                    "new_text": {"type": "string", "description": "The text to put in its place."},
+                },
+                "required": ["path", "old_text", "new_text"],
             },
         },
     },
