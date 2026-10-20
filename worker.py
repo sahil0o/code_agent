@@ -12,10 +12,14 @@ from pathlib import Path
 
 import httpx
 import qrcode
+from dotenv import load_dotenv
 
-import agent      # also loads .env, so RELAY_WORKER_KEY can live there
-import tools
+from agent import Agent
+from llm import LLM
 from logger import RunLogger
+from tools import Workspace
+
+load_dotenv()     # so RELAY_WORKER_KEY, AGENT_WORKSPACES etc. can live in .env
 
 RELAY_URL = os.environ.get("RELAY_URL", "http://127.0.0.1:8000").rstrip("/")
 WORKER_KEY = os.environ.get("RELAY_WORKER_KEY", "")
@@ -120,11 +124,12 @@ class RemoteApprovals:
         waiter["done"].set()
 
 
-def load_workspaces():
+def load_workspaces(start_folder):
     """Folders the phone may switch between, set ON THE MAC in .env, e.g.
     AGENT_WORKSPACES=practice=~/code/playground,textkit=~/code/textkit
     The phone only ever sends a NAME from this list, never a path."""
-    spaces = {tools.WORKSPACE.name: tools.WORKSPACE}          # the starting workspace is always allowed
+    start_folder = Path(start_folder).expanduser().resolve()
+    spaces = {start_folder.name: start_folder}          # the starting workspace is always allowed
     for item in os.environ.get("AGENT_WORKSPACES", "").split(","):
         if "=" not in item:
             continue
@@ -137,36 +142,85 @@ def load_workspaces():
     return spaces
 
 
-def announce(relay, workspaces):
-    relay.send("worker_online", workspace=current_workspace_name(workspaces), workspaces=sorted(workspaces))
+def load_models(default_llm):
+    """Models the phone may switch between, set ON THE MAC in .env, e.g.
+    AGENT_MODELS=gptoss=groq:openai/gpt-oss-120b,small=groq:openai/gpt-oss-20b,local=ollama:qwen2.5-coder:7b
+    Each entry is  label=provider:model . The phone only ever sends a LABEL from this list;
+    API keys stay on the Mac."""
+    models = {default_llm.model: default_llm}      # the starting model is always allowed
+    for item in os.environ.get("AGENT_MODELS", "").split(","):
+        if "=" not in item:
+            continue
+        label, spec = (part.strip() for part in item.split("=", 1))
+        provider, _, model = spec.partition(":")   # split at the FIRST colon: "ollama:qwen2.5-coder:7b" works
+        try:
+            models[label] = LLM(provider=provider.strip(), model=model.strip() or None)
+        except ValueError as e:                     # unknown provider, missing API key, ...
+            print(f"[worker] skipping model '{label}': {e}")
+    return models
 
 
-def current_workspace_name(workspaces):
-    return next((name for name, folder in workspaces.items() if folder == tools.WORKSPACE), tools.WORKSPACE.name)
+class Worker:
+    """What the Mac is doing right now: which model, which folders are allowed, which one is active."""
 
+    def __init__(self, relay, models, current_model, workspaces, current):
+        self.relay = relay
+        self.models = models                  # label -> LLM (the model allowlist)
+        self.current_model = current_model    # label of the active model
+        self.workspaces = workspaces          # name -> folder (the folder allowlist)
+        self.current = current                # name of the active folder
+        self.approvals = RemoteApprovals(relay)
+        self.task = None                      # the thread running the current task, if any
 
-def switch_workspace(relay, workspaces, name, busy):
-    if busy:
-        relay.send("notice", text="Can't switch workspace while a task is running.")
-    elif name not in workspaces:
-        relay.send("notice", text=f"Unknown workspace '{name}'. Allowed: {', '.join(sorted(workspaces))}")
-    else:
-        tools.WORKSPACE = workspaces[name]
-        print(f"[worker] workspace switched to {name}: {tools.WORKSPACE}")
-        relay.send("workspace_changed", workspace=name)
-        return
-    relay.send("workspace_changed", workspace=current_workspace_name(workspaces))   # tell the page what is still active
+    def busy(self):
+        return bool(self.task and self.task.is_alive())
 
+    @property
+    def llm(self):
+        return self.models[self.current_model]
 
-def run_task(relay, text):
-    """Runs in a background thread, so the main loop keeps receiving approvals meanwhile."""
-    relay.send("task_started", text=text)
-    try:
-        log = RelayLogger(relay, text, agent.MODEL, tools.WORKSPACE)
-        answer = agent.run_agent(text, log=log)
-        relay.send("answer", text=answer, summary=log.record.get("summary", {}))
-    except Exception as e:
-        relay.send("error", text=f"{type(e).__name__}: {e}")
+    def announce(self):
+        self.relay.send("worker_online", workspace=self.current, workspaces=sorted(self.workspaces),
+                        model=self.current_model, models=sorted(self.models))
+
+    def switch_model(self, label):
+        if self.busy():
+            self.relay.send("notice", text="Can't switch model while a task is running.")
+        elif label not in self.models:
+            self.relay.send("notice", text=f"Unknown model '{label}'. Allowed: {', '.join(sorted(self.models))}")
+        else:
+            self.current_model = label
+            print(f"[worker] model switched to {label}: {self.llm}")
+        self.relay.send("model_changed", model=self.current_model)   # tell the page what is active
+
+    def switch_workspace(self, name):
+        if self.busy():
+            self.relay.send("notice", text="Can't switch workspace while a task is running.")
+        elif name not in self.workspaces:
+            self.relay.send("notice", text=f"Unknown workspace '{name}'. Allowed: {', '.join(sorted(self.workspaces))}")
+        else:
+            self.current = name
+            print(f"[worker] workspace switched to {name}: {self.workspaces[name]}")
+        self.relay.send("workspace_changed", workspace=self.current)   # tell the page what is active
+
+    def start_task(self, text):
+        if self.busy():
+            self.relay.send("notice", text="Busy with another task. Try again when it finishes.")
+            return
+        print(f"[worker] new task: {text}")
+        self.task = threading.Thread(target=self.run_task, args=(text,), daemon=True)
+        self.task.start()
+
+    def run_task(self, text):
+        """Runs in a background thread, so the main loop keeps receiving approvals meanwhile."""
+        self.relay.send("task_started", text=text)
+        try:
+            workspace = Workspace(self.workspaces[self.current], approve=self.approvals.ask)
+            log = RelayLogger(self.relay, text, self.llm.model, workspace.root)
+            answer = Agent(self.llm, workspace).run(text, log=log)
+            self.relay.send("answer", text=answer, summary=log.record.get("summary", {}))
+        except Exception as e:
+            self.relay.send("error", text=f"{type(e).__name__}: {e}")
 
 
 def watch_keyboard(relay):
@@ -181,20 +235,23 @@ def watch_keyboard(relay):
 def main():
     if len(WORKER_KEY) < 32:
         raise SystemExit("Set RELAY_WORKER_KEY (the same secret the relay uses) in .env or the environment.")
+    default_llm = LLM.from_env()
+    models = load_models(default_llm)
+    workspaces = load_workspaces(os.environ.get("AGENT_WORKSPACE", Path(__file__).parent / "playground"))
+    current = next(iter(workspaces))          # the starting folder is first in the list
     relay = RelayConnection(RELAY_URL)
-    approvals = RemoteApprovals(relay)
-    tools.ask_approval = approvals.ask
+    worker = Worker(relay, models, default_llm.model, workspaces, current)
 
-    workspaces = load_workspaces()
     print(f"[worker] relay: {RELAY_URL}")
+    print(f"[worker] models the phone may choose: {', '.join(sorted(models))}")
+    print(f"[worker] current model: {default_llm}")
     print(f"[worker] workspaces the phone may choose: {', '.join(sorted(workspaces))}")
-    print(f"[worker] current workspace: {tools.WORKSPACE}\n")
+    print(f"[worker] current workspace: {workspaces[current]}\n")
     relay.register()
-    announce(relay, workspaces)
+    worker.announce()
     if sys.stdin.isatty():
         threading.Thread(target=watch_keyboard, args=(relay,), daemon=True).start()
 
-    current_task = None
     failures = 0
     while True:
         try:
@@ -206,7 +263,7 @@ def main():
                 print("[worker] the relay no longer knows this session (it probably restarted). Creating a new one.")
                 try:
                     relay.register()
-                    announce(relay, workspaces)
+                    worker.announce()
                 except httpx.HTTPError as err:
                     print(f"[worker] could not create a new session: {err}")
                     time.sleep(5)
@@ -225,18 +282,14 @@ def main():
 
         if message is None:
             continue
-        busy = bool(current_task and current_task.is_alive())
         if message["type"] == "approval":
-            approvals.deliver(message)
+            worker.approvals.deliver(message)
         elif message["type"] == "workspace":
-            switch_workspace(relay, workspaces, str(message.get("name", "")), busy)
+            worker.switch_workspace(str(message.get("name", "")))
+        elif message["type"] == "model":
+            worker.switch_model(str(message.get("name", "")))
         elif message["type"] == "task":
-            if busy:
-                relay.send("notice", text="Busy with another task. Try again when it finishes.")
-                continue
-            print(f"[worker] new task: {message.get('text')}")
-            current_task = threading.Thread(target=run_task, args=(relay, message.get("text", "")), daemon=True)
-            current_task.start()
+            worker.start_task(str(message.get("text", "")))
 
 
 if __name__ == "__main__":
