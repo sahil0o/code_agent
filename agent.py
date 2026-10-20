@@ -34,82 +34,94 @@ How to answer:
 - If you could not verify something, say so plainly instead of guessing."""
 
 
-def call_model(llm, messages, log, step, **extra):
-    """One model call, logged."""
-    response, seconds = llm.chat(messages, tools=TOOL_SCHEMAS, **extra)
-    log.model_call(step, response.usage, seconds, response.choices[0].finish_reason)
-    return response
+class Agent:
+    """One model + one workspace. Call .run(question) as many times as you like."""
 
+    def __init__(self, llm, workspace, max_steps=MAX_STEPS, system_prompt=SYSTEM_PROMPT):
+        self.llm = llm
+        self.workspace = workspace
+        self.max_steps = max_steps
+        self.system_prompt = system_prompt
 
-def run_agent(question, workspace, llm, log=None):
-    log = log or RunLogger(question, llm.model, workspace.root)
-    print(f"Workspace: {workspace.root} | Model: {llm.model}")
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": question},
-    ]
+    def call_model(self, messages, log, step, **extra):
+        """One model call, logged."""
+        response, seconds = self.llm.chat(messages, tools=TOOL_SCHEMAS, **extra)
+        log.model_call(step, response.usage, seconds, response.choices[0].finish_reason)
+        return response
 
-    try:
-        for step in range(1, MAX_STEPS + 1):
-            # 1. Ask the model what to do next
-            try:
-                response = call_model(llm, messages, log, step)
-            except BadModelOutput as e:
-                # The model produced malformed output. Tell it what went wrong and let it try again.
-                if e.code == "tool_use_failed":
-                    note = f"Your last tool call was invalid. Only these tools exist: {', '.join(workspace.tools)}. Try again."
-                else:
-                    note = "Your last response could not be read. Reply with either a tool call or your final answer."
-                log.api_error(step, e.code, e.failed_text)
-                print(f"[step {step}] the API rejected the model's output, asking it to try again")
-                print(f"           ✗ {e.failed_text[:200]}")
-                messages.append({"role": "user", "content": note})
-                continue
+    def run(self, question, log=None):
+        """Work on one question or task until the model answers. Returns the answer text.
+        Pass your own log (e.g. one that also streams to the phone); otherwise a normal RunLogger is used."""
+        log = log or RunLogger(question, self.llm.model, self.workspace.root)
+        print(f"Workspace: {self.workspace.root} | Model: {self.llm.model}")
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": question},
+        ]
 
-            msg = response.choices[0].message
-
-            # 2. No tool calls means the model is finished
-            if not msg.tool_calls:
-                answer = msg.content or f"(empty answer, finish_reason={response.choices[0].finish_reason})"
-                return finish(log, "answered", answer)
-
-            # 3. Record what the model asked for
-            messages.append({
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
-                    for tc in msg.tool_calls
-                ],
-            })
-
-            # 4. Run every requested tool and send back the results
-            for tc in msg.tool_calls:
-                print(f"[step {step}] {tc.function.name}({tc.function.arguments})")
-                result = workspace.run(tc.function.name, tc.function.arguments)
-                preview = result.replace("\n", " | ")[:100]
-                print(f"           → {preview}")
-                log.tool_call(step, tc.function.name, tc.function.arguments, result)
-                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-
-        # Out of steps: ask for a best-effort answer from what it has already gathered
-        print(f"[limit] {MAX_STEPS} steps used, asking for a final answer")
-        messages.append({"role": "user", "content": "You have run out of steps. Answer now using only what you have "
-                         "already found, with citations, and say clearly what you could not verify."})
         try:
-            response = call_model(llm, messages, log, MAX_STEPS + 1, tool_choice="none")
-            answer = response.choices[0].message.content or f"Stopped after {MAX_STEPS} steps without a final answer."
-        except BadModelOutput:
-            answer = f"Stopped after {MAX_STEPS} steps without a final answer."
-        return finish(log, "step_limit", answer)
+            for step in range(1, self.max_steps + 1):
+                # 1. Ask the model what to do next
+                try:
+                    response = self.call_model(messages, log, step)
+                except BadModelOutput as e:
+                    # The model produced malformed output. Tell it what went wrong and let it try again.
+                    if e.code == "tool_use_failed":
+                        note = (f"Your last tool call was invalid. Only these tools exist: "
+                                f"{', '.join(self.workspace.tools)}. Try again.")
+                    else:
+                        note = "Your last response could not be read. Reply with either a tool call or your final answer."
+                    log.api_error(step, e.code, e.failed_text)
+                    print(f"[step {step}] the API rejected the model's output, asking it to try again")
+                    print(f"           ✗ {e.failed_text[:200]}")
+                    messages.append({"role": "user", "content": note})
+                    continue
 
-    except Exception as e:
-        finish(log, "crashed", f"{type(e).__name__}: {e}")
-        raise   # still crash loudly, but the log is saved first
+                msg = response.choices[0].message
+
+                # 2. No tool calls means the model is finished
+                if not msg.tool_calls:
+                    answer = msg.content or f"(empty answer, finish_reason={response.choices[0].finish_reason})"
+                    return finish(log, "answered", answer)
+
+                # 3. Record what the model asked for
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in msg.tool_calls
+                    ],
+                })
+
+                # 4. Run every requested tool and send back the results
+                for tc in msg.tool_calls:
+                    print(f"[step {step}] {tc.function.name}({tc.function.arguments})")
+                    result = self.workspace.run(tc.function.name, tc.function.arguments)
+                    preview = result.replace("\n", " | ")[:100]
+                    print(f"           → {preview}")
+                    log.tool_call(step, tc.function.name, tc.function.arguments, result)
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+
+            # Out of steps: ask for a best-effort answer from what it has already gathered
+            print(f"[limit] {self.max_steps} steps used, asking for a final answer")
+            messages.append({"role": "user", "content": "You have run out of steps. Answer now using only what you have "
+                             "already found, with citations, and say clearly what you could not verify."})
+            fallback = f"Stopped after {self.max_steps} steps without a final answer."
+            try:
+                response = self.call_model(messages, log, self.max_steps + 1, tool_choice="none")
+                answer = response.choices[0].message.content or fallback
+            except BadModelOutput:
+                answer = fallback
+            return finish(log, "step_limit", answer)
+
+        except Exception as e:
+            finish(log, "crashed", f"{type(e).__name__}: {e}")
+            raise   # still crash loudly, but the log is saved first
 
 
 def finish(log, outcome, answer):
@@ -124,9 +136,5 @@ def finish(log, outcome, answer):
 if __name__ == "__main__":
     question = sys.argv[1] if len(sys.argv) > 1 else "What does sale_price('bag', 10) return, and is that right?"
     workspace = Workspace(os.environ.get("AGENT_WORKSPACE", Path(__file__).parent / "playground"))
-    llm = LLM(
-        provider=os.environ.get("AGENT_PROVIDER", "groq"),
-        model=os.environ.get("AGENT_MODEL"),          # empty means the provider's default model
-        base_url=os.environ.get("AGENT_BASE_URL"),    # only for servers not in llm.PROVIDERS
-    )
-    print("\nAnswer:\n" + run_agent(question, workspace, llm))
+    agent = Agent(LLM.from_env(), workspace)
+    print("\nAnswer:\n" + agent.run(question))

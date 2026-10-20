@@ -15,6 +15,8 @@ PROVIDERS = {
                    "model": "openai/gpt-oss-120b"},
     "ollama":     {"base_url": "http://localhost:11434/v1",      "key_env": None,
                    "model": "qwen2.5-coder:7b"},
+    "gemini":     {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+               "key_env": "GEMINI_API_KEY", "model": None},
 }
 
 # Error codes some providers return when the MODEL wrote a broken tool call or unreadable output.
@@ -54,6 +56,15 @@ class LLM:
             api_key=api_key or "not-needed",   # local servers ignore the key, but the SDK wants one
             timeout=timeout,
             max_retries=max_retries,           # rate limits and network blips are retried automatically
+        )
+
+    @classmethod
+    def from_env(cls, provider=None, model=None, base_url=None):
+        """Build from arguments, falling back to AGENT_PROVIDER / AGENT_MODEL / AGENT_BASE_URL."""
+        return cls(
+            provider=provider or os.environ.get("AGENT_PROVIDER", "groq"),
+            model=model or os.environ.get("AGENT_MODEL") or None,       # None = the provider's default
+            base_url=base_url or os.environ.get("AGENT_BASE_URL") or None,
         )
 
     def chat(self, messages, tools=None, **extra):
