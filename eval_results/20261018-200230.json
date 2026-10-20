@@ -1,0 +1,18 @@
+{
+  "model": "openai/gpt-oss-120b",
+  "results": [
+    {
+      "id": "inv-fix-total-value",
+      "kind": "fix",
+      "passed": true,
+      "reason": "ok",
+      "outcome": "answered",
+      "steps": 13,
+      "tokens": 29976,
+      "tool_errors": 0,
+      "api_errors": 1,
+      "seconds": 142.7,
+      "log": "20261018-200007-44e1e0.json"
+    }
+  ]
+}

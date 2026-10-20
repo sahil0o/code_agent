@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Remote</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2125; --muted: #6b7280; --border: #e3e5e8;
+    --accent: #2f6fde; --ok: #1f8a4c; --bad: #c2372b; --add-bg: #e7f6ec; --del-bg: #fdecea;
+    --code-bg: #f2f3f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121417; --card: #1c1f24; --text: #e6e8eb; --muted: #9aa1ab; --border: #2c3138;
+      --accent: #6b9cf0; --ok: #4cc27f; --bad: #f07067; --add-bg: #173323; --del-bg: #3a1d1b;
+      --code-bg: #15181c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px;
+           padding: 12px 16px; background: var(--card); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 16px; margin: 0; flex: 1; }
+  #status { font-size: 13px; color: var(--muted); }
+  #status::before { content: "●"; margin-right: 4px; color: var(--muted); }
+  #status.online::before { color: var(--ok); }
+  #status.offline::before { color: var(--bad); }
+  main { max-width: 760px; margin: 0 auto; padding: 12px 16px 140px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+          padding: 10px 12px; margin: 8px 0; overflow-wrap: anywhere; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .task { border-left: 4px solid var(--accent); }
+  .step { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  .step .err { color: var(--bad); }
+  details summary { cursor: pointer; }
+  pre { margin: 8px 0 0; padding: 8px; background: var(--code-bg); border-radius: 6px;
+        overflow-x: auto; font-size: 12.5px; line-height: 1.4; white-space: pre; }
+  .diff .add { background: var(--add-bg); display: block; }
+  .diff .del { background: var(--del-bg); display: block; }
+  .approval { border: 2px solid var(--accent); }
+  .approval.resolved { border-color: var(--border); }
+  .buttons { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  input[type=text], textarea { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);
+        background: var(--bg); color: var(--text); font: inherit; }
+  button { padding: 10px 16px; border: 0; border-radius: 8px; font: inherit; font-weight: 600;
+           color: #fff; background: var(--accent); cursor: pointer; }
+  button.approve { background: var(--ok); }
+  button.reject { background: var(--bad); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  .answer { border-left: 4px solid var(--ok); white-space: pre-wrap; }
+  .error { border-left: 4px solid var(--bad); }
+  footer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card);
+           border-top: 1px solid var(--border); padding: 10px 16px; }
+  footer form { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+  footer textarea { resize: none; height: 44px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent Remote</h1>
+  <span id="status">connecting…</span>
+</header>
+<main id="feed"></main>
+<footer>
+  <form id="task-form">
+    <textarea id="task-input" placeholder="Describe a task…" required></textarea>
+    <button type="submit">Send</button>
+  </form>
+</footer>
+
+<script>
+// ---------- 1. Pairing: read the link's #fragment, trade the one-time code for a token ----------
+const params = new URLSearchParams(location.hash.slice(1));
+const SESSION = params.get("session");
+const PAIR_CODE = params.get("pair");
+let TOKEN = null;
+const feed = document.getElementById("feed");
+
+// The token is remembered on this phone, so reloading the page works without a new link.
+// Storage can be unavailable (private browsing), so every access is wrapped in try/catch.
+const storageKey = `agent-remote-token:${SESSION}`;
+function loadToken() { try { return localStorage.getItem(storageKey); } catch { return null; } }
+function saveToken(t) { try { localStorage.setItem(storageKey, t); } catch {} }
+
+async function pairIfNeeded() {
+  if (PAIR_CODE) {
+    // Remove the one-time code from the address bar right away, so it isn't left in history or screenshots
+    history.replaceState(null, "", `#session=${SESSION}`);
+    const response = await fetch(`/sessions/${SESSION}/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: PAIR_CODE }),
+    });
+    if (response.ok) {
+      TOKEN = (await response.json()).client_token;
+      saveToken(TOKEN);
+      return true;
+    }
+  }
+  TOKEN = loadToken();       // already paired earlier on this phone?
+  return Boolean(TOKEN);
+}
+const statusEl = document.getElementById("status");
+
+function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls || ""; }
+
+// ---------- 2. Small helper: build an element with SAFE text ----------
+// Event data contains code from your repo. We always use textContent, never innerHTML,
+// so code that looks like HTML (e.g. "<script>") is shown as text, never executed.
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function card(className) {
+  const c = el("div", "card " + (className || ""));
+  feed.appendChild(c);
+  return c;
+}
+
+function scrollDown() { window.scrollTo(0, document.body.scrollHeight); }
+
+// ---------- 3. Talking to the relay ----------
+async function api(method, path, body) {
+  const response = await fetch(`/sessions/${SESSION}${path}`, {
+    method,
+    headers: { "Authorization": TOKEN, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!response.ok) throw new Error(`${response.status}`);
+  return response.json();
+}
+
+const sendMessage = (message) => api("POST", "/messages", message);
+
+// ---------- 4. Turning events into cards ----------
+const approvalCards = {};   // approval id -> its card, so we can disable the buttons later
+
+function renderDiff(diffText) {
+  const pre = el("pre", "diff");
+  for (const line of diffText.split("\n")) {
+    let cls = "";
+    if (line.startsWith("+") && !line.startsWith("+++")) cls = "add";
+    if (line.startsWith("-") && !line.startsWith("---")) cls = "del";
+    pre.appendChild(el("span", cls, line + "\n"));
+  }
+  return pre;
+}
+
+function resolveApproval(id, approved) {
+  const c = approvalCards[id];
+  if (!c) return;
+  c.classList.add("resolved");
+  c.querySelectorAll("button, input").forEach((x) => (x.disabled = true));
+  c.querySelector(".verdict").textContent = approved ? "Approved" : "Rejected";
+}
+
+const renderers = {
+  worker_online: (e) => { card().appendChild(el("div", "muted", `Worker online · workspace: ${e.workspace}`)); },
+  task_started:  (e) => { card("task").appendChild(el("div", "", e.text)); },
+  model_call:    () => {},   // too chatty to show; the tool calls tell the story
+  tool_call: (e) => {
+    const c = card("step");
+    const details = el("details");
+    const summary = el("summary", e.is_error ? "err" : "", `${e.is_error ? "✗" : "→"} [${e.step}] ${e.name}(${e.arguments})`);
+    details.appendChild(summary);
+    details.appendChild(el("pre", "", e.result_preview));
+    c.appendChild(details);
+  },
+  api_error: (e) => { card("error").appendChild(el("div", "muted", `Model output rejected (${e.code}); retrying`)); },
+  approval_needed: (e) => {
+    const c = card("approval");
+    approvalCards[e.id] = c;
+    c.appendChild(el("strong", "", "Approve this edit?"));
+    c.appendChild(renderDiff(e.diff));
+    const reason = el("input");
+    reason.type = "text";
+    reason.placeholder = "Reason (optional, sent to the agent if you reject)";
+    reason.style.marginTop = "10px";
+    c.appendChild(reason);
+    const buttons = el("div", "buttons");
+    const yes = el("button", "approve", "Approve");
+    const no = el("button", "reject", "Reject");
+    const verdict = el("span", "verdict muted");
+    yes.onclick = () => answer(e.id, true, reason.value);
+    no.onclick = () => answer(e.id, false, reason.value);
+    buttons.append(yes, no, verdict);
+    c.appendChild(buttons);
+  },
+  approval_resolved: (e) => resolveApproval(e.id, e.approved),
+  answer: (e) => {
+    const c = card("answer");
+    c.appendChild(el("div", "", e.text));
+    const s = e.summary || {};
+    c.appendChild(el("div", "muted", `${s.steps ?? "?"} steps · ${(s.tokens_in || 0) + (s.tokens_out || 0)} tokens · ${s.seconds ?? "?"}s`));
+  },
+  notice: (e) => { card().appendChild(el("div", "muted", e.text)); },
+  error:  (e) => { card("error").appendChild(el("div", "", `Error: ${e.text}`)); },
+};
+
+async function answer(id, approved, reason) {
+  const c = approvalCards[id];
+  c.querySelectorAll("button").forEach((b) => (b.disabled = true));   // no double taps
+  try {
+    await sendMessage({ type: "approval", id, approved, reason });
+  } catch (err) {
+    c.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    alert("Could not send your answer: " + err.message);
+  }
+}
+
+// ---------- 5. The long-poll loop ----------
+async function listen() {
+  let after = -1;
+  while (true) {
+    try {
+      const { events } = await api("GET", `/events?after=${after}`);
+      setStatus("connected", "online");
+      for (const e of events) {
+        after = e.index;
+        (renderers[e.type] || (() => {}))(e);
+      }
+      if (events.length) scrollDown();
+    } catch (err) {
+      if (["403", "404", "429"].includes(err.message)) {
+        setStatus(err.message === "429" ? "too many attempts, wait a few minutes" : "session ended", "offline");
+        return;                                     // retrying won't help
+      }
+      setStatus("reconnecting…", "offline");
+      await new Promise((r) => setTimeout(r, 2000)); // wait, then try again
+    }
+  }
+}
+
+// ---------- 6. Sending a task ----------
+document.getElementById("task-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const input = document.getElementById("task-input");
+  const text = input.value.trim();
+  if (!text) return;
+  try {
+    await sendMessage({ type: "task", text });
+    input.value = "";
+  } catch (err) {
+    alert("Could not send the task: " + err.message);
+  }
+};
+
+(async () => {
+  if (!SESSION || !(await pairIfNeeded())) {
+    setStatus("not paired", "offline");
+    card("error").appendChild(el("div", "",
+      "This link is invalid, expired or already used. Press Enter in the worker's terminal for a new one."));
+    return;
+  }
+  listen();
+})();
+</script>
+</body>
+</html>

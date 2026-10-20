@@ -1,7 +1,14 @@
+# secrets
 .env
+*.pem
+
+# logs and private code
+runs/
+sensor/
+
+# Python and tool junk
 __pycache__/
 .pytest_cache/
 .ipynb_checkpoints/
+.venv/
 .DS_Store
-sensor 
-runs

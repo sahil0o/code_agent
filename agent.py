@@ -3,8 +3,9 @@ import sys
 import time
 from openai import OpenAI, BadRequestError
 from dotenv import load_dotenv
+import tools
 
-from tools import TOOL_SCHEMAS, TOOLS, WORKSPACE, run_tool
+from tools import TOOL_SCHEMAS, TOOLS, run_tool
 from logger import RunLogger
 
 load_dotenv()
@@ -50,8 +51,8 @@ def call_model(messages, log, step, **extra):
 
 
 def run_agent(question, log=None):
-    log = log or RunLogger(question, MODEL, WORKSPACE)
-    print(f"Workspace: {WORKSPACE}")
+    log = log or RunLogger(question, MODEL, tools.WORKSPACE)
+    print(f"Workspace: {tools.WORKSPACE}")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": question},

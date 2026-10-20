@@ -1,0 +1,58 @@
+[
+  {
+    "id": "inv-q-count-tests",
+    "repo": "inventory",
+    "kind": "question",
+    "prompt": "How many test functions are in test_inventory.py?",
+    "expect": {"answer_contains": ["7"]}
+  },
+  {
+    "id": "inv-q-cross-file",
+    "repo": "inventory",
+    "kind": "question",
+    "prompt": "sale_price('bag', 10) returns the wrong value. Which file and which function contain the actual bug? Do not change any files.",
+    "expect": {"answer_contains": ["pricing.py", "apply_discount"]}
+  },
+  {
+    "id": "txt-q-follow-constant",
+    "repo": "textkit",
+    "kind": "question",
+    "prompt": "Which file defines the minimum word length used by count_words, and what is its value? Do not change any files.",
+    "expect": {"answer_contains": ["config.py", "3"]}
+  },
+  {
+    "id": "inv-fix-total-value",
+    "repo": "inventory",
+    "kind": "fix",
+    "prompt": "total_value() in inventory.py ignores quantity. Fix it.",
+    "expect": {"tests_pass": ["test_inventory.py::test_total_value"]}
+  },
+  {
+    "id": "inv-fix-low-stock",
+    "repo": "inventory",
+    "kind": "fix",
+    "prompt": "low_stock() does not match its docstring. Fix it.",
+    "expect": {"tests_pass": ["test_inventory.py::test_low_stock_includes_items_at_threshold"]}
+  },
+  {
+    "id": "inv-fix-cross-file",
+    "repo": "inventory",
+    "kind": "fix",
+    "prompt": "sale_price('bag', 10) should return 450.0 but returns 50.0. Find the real cause and fix it.",
+    "expect": {"tests_pass": ["test_inventory.py::test_sale_price", "test_inventory.py::test_apply_discount"]}
+  },
+  {
+    "id": "txt-fix-reading-time",
+    "repo": "textkit",
+    "kind": "fix",
+    "prompt": "reading_time() should round up to the next whole minute, but it rounds down. Fix it.",
+    "expect": {"tests_pass": ["test_textkit.py::test_reading_time_rounds_up", "test_textkit.py::test_reading_time_empty"]}
+  },
+  {
+    "id": "txt-fix-all",
+    "repo": "textkit",
+    "kind": "fix",
+    "prompt": "Fix every function in this project that does not match its docstring.",
+    "expect": {"tests_pass": ["test_textkit.py::test_count_words_keeps_words_of_min_length", "test_textkit.py::test_top_words_order", "test_textkit.py::test_reading_time_rounds_up", "test_textkit.py::test_format_report"]}
+  }
+]

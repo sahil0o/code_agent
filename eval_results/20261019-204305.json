@@ -1,0 +1,109 @@
+{
+  "model": "openai/gpt-oss-120b",
+  "results": [
+    {
+      "id": "inv-q-count-tests",
+      "kind": "question",
+      "passed": true,
+      "reason": "ok",
+      "outcome": "answered",
+      "steps": 3,
+      "tokens": 3504,
+      "tool_errors": 0,
+      "api_errors": 0,
+      "seconds": 5.7,
+      "log": "20261019-203455-c2b707.json"
+    },
+    {
+      "id": "inv-q-cross-file",
+      "kind": "question",
+      "passed": true,
+      "reason": "ok",
+      "outcome": "answered",
+      "steps": 5,
+      "tokens": 7561,
+      "tool_errors": 0,
+      "api_errors": 0,
+      "seconds": 20.7,
+      "log": "20261019-203501-de5cde.json"
+    },
+    {
+      "id": "txt-q-follow-constant",
+      "kind": "question",
+      "passed": true,
+      "reason": "ok",
+      "outcome": "answered",
+      "steps": 5,
+      "tokens": 4652,
+      "tool_errors": 0,
+      "api_errors": 1,
+      "seconds": 32.7,
+      "log": "20261019-203522-6cbc32.json"
+    },
+    {
+      "id": "inv-fix-total-value",
+      "kind": "fix",
+      "passed": true,
+      "reason": "ok",
+      "outcome": "answered",
+      "steps": 11,
+      "tokens": 27932,
+      "tool_errors": 0,
+      "api_errors": 0,
+      "seconds": 176.8,
+      "log": "20261019-203555-830f6f.json"
+    },
+    {
+      "id": "inv-fix-low-stock",
+      "kind": "fix",
+      "passed": true,
+      "reason": "ok",
+      "outcome": "answered",
+      "steps": 5,
+      "tokens": 6943,
+      "tool_errors": 0,
+      "api_errors": 0,
+      "seconds": 34.1,
+      "log": "20261019-203852-96048f.json"
+    },
+    {
+      "id": "inv-fix-cross-file",
+      "kind": "fix",
+      "passed": true,
+      "reason": "ok",
+      "outcome": "answered",
+      "steps": 6,
+      "tokens": 9977,
+      "tool_errors": 0,
+      "api_errors": 0,
+      "seconds": 51.4,
+      "log": "20261019-203927-8560cb.json"
+    },
+    {
+      "id": "txt-fix-reading-time",
+      "kind": "fix",
+      "passed": true,
+      "reason": "ok",
+      "outcome": "answered",
+      "steps": 5,
+      "tokens": 6969,
+      "tool_errors": 0,
+      "api_errors": 0,
+      "seconds": 36.3,
+      "log": "20261019-204019-1610ab.json"
+    },
+    {
+      "id": "txt-fix-all",
+      "kind": "fix",
+      "passed": true,
+      "reason": "ok",
+      "outcome": "answered",
+      "steps": 10,
+      "tokens": 22195,
+      "tool_errors": 0,
+      "api_errors": 0,
+      "seconds": 128.8,
+      "log": "20261019-204056-a8d559.json"
+    }
+  ]
+}

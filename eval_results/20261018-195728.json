@@ -1,0 +1,18 @@
+{
+  "model": "openai/gpt-oss-120b",
+  "results": [
+    {
+      "id": "inv-fix-total-value",
+      "kind": "fix",
+      "passed": false,
+      "reason": "tests could not run (broken code?): ['no tests ran in 0.00s']",
+      "outcome": "step_limit",
+      "steps": 16,
+      "tokens": 18081,
+      "tool_errors": 2,
+      "api_errors": 0,
+      "seconds": 24.1,
+      "log": "20261018-195703-63f834.json"
+    }
+  ]
+}
