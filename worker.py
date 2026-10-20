@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import httpx
 import qrcode
@@ -119,6 +120,44 @@ class RemoteApprovals:
         waiter["done"].set()
 
 
+def load_workspaces():
+    """Folders the phone may switch between, set ON THE MAC in .env, e.g.
+    AGENT_WORKSPACES=practice=~/code/playground,textkit=~/code/textkit
+    The phone only ever sends a NAME from this list, never a path."""
+    spaces = {tools.WORKSPACE.name: tools.WORKSPACE}          # the starting workspace is always allowed
+    for item in os.environ.get("AGENT_WORKSPACES", "").split(","):
+        if "=" not in item:
+            continue
+        name, path = (part.strip() for part in item.split("=", 1))
+        folder = Path(path).expanduser().resolve()
+        if folder.is_dir():
+            spaces[name] = folder
+        else:
+            print(f"[worker] skipping workspace '{name}': {folder} is not a folder")
+    return spaces
+
+
+def announce(relay, workspaces):
+    relay.send("worker_online", workspace=current_workspace_name(workspaces), workspaces=sorted(workspaces))
+
+
+def current_workspace_name(workspaces):
+    return next((name for name, folder in workspaces.items() if folder == tools.WORKSPACE), tools.WORKSPACE.name)
+
+
+def switch_workspace(relay, workspaces, name, busy):
+    if busy:
+        relay.send("notice", text="Can't switch workspace while a task is running.")
+    elif name not in workspaces:
+        relay.send("notice", text=f"Unknown workspace '{name}'. Allowed: {', '.join(sorted(workspaces))}")
+    else:
+        tools.WORKSPACE = workspaces[name]
+        print(f"[worker] workspace switched to {name}: {tools.WORKSPACE}")
+        relay.send("workspace_changed", workspace=name)
+        return
+    relay.send("workspace_changed", workspace=current_workspace_name(workspaces))   # tell the page what is still active
+
+
 def run_task(relay, text):
     """Runs in a background thread, so the main loop keeps receiving approvals meanwhile."""
     relay.send("task_started", text=text)
@@ -146,10 +185,12 @@ def main():
     approvals = RemoteApprovals(relay)
     tools.ask_approval = approvals.ask
 
+    workspaces = load_workspaces()
     print(f"[worker] relay: {RELAY_URL}")
-    print(f"[worker] workspace: {tools.WORKSPACE}\n")
+    print(f"[worker] workspaces the phone may choose: {', '.join(sorted(workspaces))}")
+    print(f"[worker] current workspace: {tools.WORKSPACE}\n")
     relay.register()
-    relay.send("worker_online", workspace=tools.WORKSPACE.name)
+    announce(relay, workspaces)
     if sys.stdin.isatty():
         threading.Thread(target=watch_keyboard, args=(relay,), daemon=True).start()
 
@@ -165,7 +206,7 @@ def main():
                 print("[worker] the relay no longer knows this session (it probably restarted). Creating a new one.")
                 try:
                     relay.register()
-                    relay.send("worker_online", workspace=tools.WORKSPACE.name)
+                    announce(relay, workspaces)
                 except httpx.HTTPError as err:
                     print(f"[worker] could not create a new session: {err}")
                     time.sleep(5)
@@ -184,10 +225,13 @@ def main():
 
         if message is None:
             continue
+        busy = bool(current_task and current_task.is_alive())
         if message["type"] == "approval":
             approvals.deliver(message)
+        elif message["type"] == "workspace":
+            switch_workspace(relay, workspaces, str(message.get("name", "")), busy)
         elif message["type"] == "task":
-            if current_task and current_task.is_alive():
+            if busy:
                 relay.send("notice", text="Busy with another task. Try again when it finishes.")
                 continue
             print(f"[worker] new task: {message.get('text')}")

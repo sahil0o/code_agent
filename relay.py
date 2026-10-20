@@ -195,8 +195,8 @@ def pair(session_id: str, body: dict, request: Request):
 @app.post("/sessions/{session_id}/messages")
 async def client_message(session_id: str, message: dict, request: Request, authorization: str = Header(None)):
     session = get_session(request, session_id, authorization, "client")
-    if message.get("type") not in ("task", "approval"):
-        raise HTTPException(400, "type must be 'task' or 'approval'")
+    if message.get("type") not in ("task", "approval", "workspace"):
+        raise HTTPException(400, "type must be 'task', 'approval' or 'workspace'")
     if len(str(message.get("text", ""))) > 20_000:
         raise HTTPException(413, "Task text too long")
     try:

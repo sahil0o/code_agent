@@ -24,6 +24,8 @@
            padding: 12px 16px; background: var(--card); border-bottom: 1px solid var(--border); }
   header h1 { font-size: 16px; margin: 0; flex: 1; }
   #status { font-size: 13px; color: var(--muted); }
+  #workspace { font: inherit; font-size: 13px; padding: 4px 6px; border-radius: 6px; max-width: 40%;
+               border: 1px solid var(--border); background: var(--bg); color: var(--text); }
   #status::before { content: "●"; margin-right: 4px; color: var(--muted); }
   #status.online::before { color: var(--ok); }
   #status.offline::before { color: var(--bad); }
@@ -60,6 +62,7 @@
 <body>
 <header>
   <h1>Agent Remote</h1>
+  <select id="workspace" title="Workspace" disabled></select>
   <span id="status">connecting…</span>
 </header>
 <main id="feed"></main>
@@ -159,8 +162,29 @@ function resolveApproval(id, approved) {
   c.querySelector(".verdict").textContent = approved ? "Approved" : "Rejected";
 }
 
+// ---------- Workspace picker: the phone only sends a NAME from the Mac's allowlist ----------
+const picker = document.getElementById("workspace");
+
+function showWorkspace(current, choices) {
+  if (choices) {
+    picker.replaceChildren(...choices.map((name) => { const o = el("option", "", name); o.value = name; return o; }));
+    picker.disabled = choices.length < 2;
+  }
+  picker.value = current;
+}
+
+picker.onchange = () => sendMessage({ type: "workspace", name: picker.value })
+  .catch((err) => alert("Could not switch workspace: " + err.message));
+
 const renderers = {
-  worker_online: (e) => { card().appendChild(el("div", "muted", `Worker online · workspace: ${e.workspace}`)); },
+  worker_online: (e) => {
+    showWorkspace(e.workspace, e.workspaces || [e.workspace]);
+    card().appendChild(el("div", "muted", `Worker online · workspace: ${e.workspace}`));
+  },
+  workspace_changed: (e) => {
+    showWorkspace(e.workspace);
+    card().appendChild(el("div", "muted", `Workspace: ${e.workspace}`));
+  },
   task_started:  (e) => { card("task").appendChild(el("div", "", e.text)); },
   model_call:    () => {},   // too chatty to show; the tool calls tell the story
   tool_call: (e) => {
