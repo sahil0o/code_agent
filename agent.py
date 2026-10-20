@@ -1,11 +1,11 @@
 import os
 import sys
 import time
+from pathlib import Path
 from openai import OpenAI, BadRequestError
 from dotenv import load_dotenv
-import tools
 
-from tools import TOOL_SCHEMAS, TOOLS, run_tool
+from tools import TOOL_SCHEMAS, Workspace
 from logger import RunLogger
 
 load_dotenv()
@@ -13,6 +13,7 @@ client = OpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=os.environ["GROQ_API_KEY"],
     max_retries=5,   # on a rate-limit error, wait and retry automatically
+    timeout=60,      # give up on a hung request instead of waiting forever
 )
 MODEL = "openai/gpt-oss-120b"
 MAX_STEPS = 15      # safety cap: the agent can never loop forever
@@ -50,9 +51,9 @@ def call_model(messages, log, step, **extra):
     return response
 
 
-def run_agent(question, log=None):
-    log = log or RunLogger(question, MODEL, tools.WORKSPACE)
-    print(f"Workspace: {tools.WORKSPACE}")
+def run_agent(question, workspace, log=None):
+    log = log or RunLogger(question, MODEL, workspace.root)
+    print(f"Workspace: {workspace.root}")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": question},
@@ -68,7 +69,7 @@ def run_agent(question, log=None):
                 error_text = str(e)
                 if "tool_use_failed" in error_text:
                     code = "tool_use_failed"
-                    note = f"Your last tool call was invalid. Only these tools exist: {', '.join(TOOLS)}. Try again."
+                    note = f"Your last tool call was invalid. Only these tools exist: {', '.join(workspace.tools)}. Try again."
                 elif "output_parse_failed" in error_text:
                     code = "output_parse_failed"
                     note = "Your last response could not be read. Reply with either a tool call or your final answer."
@@ -109,7 +110,7 @@ def run_agent(question, log=None):
             # 4. Run every requested tool and send back the results
             for tc in msg.tool_calls:
                 print(f"[step {step}] {tc.function.name}({tc.function.arguments})")
-                result = run_tool(tc.function.name, tc.function.arguments)
+                result = workspace.run(tc.function.name, tc.function.arguments)
                 preview = result.replace("\n", " | ")[:100]
                 print(f"           → {preview}")
                 log.tool_call(step, tc.function.name, tc.function.arguments, result)
@@ -142,4 +143,5 @@ def finish(log, outcome, answer):
 
 if __name__ == "__main__":
     question = sys.argv[1] if len(sys.argv) > 1 else "What does sale_price('bag', 10) return, and is that right?"
-    print("\nAnswer:\n" + run_agent(question))
+    workspace = Workspace(os.environ.get("AGENT_WORKSPACE", Path(__file__).parent / "playground"))
+    print("\nAnswer:\n" + run_agent(question, workspace))
