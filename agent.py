@@ -1,21 +1,14 @@
 import os
 import sys
-import time
 from pathlib import Path
-from openai import OpenAI, BadRequestError
+
 from dotenv import load_dotenv
 
-from tools import TOOL_SCHEMAS, Workspace
+from llm import LLM, BadModelOutput
 from logger import RunLogger
+from tools import TOOL_SCHEMAS, Workspace
 
 load_dotenv()
-client = OpenAI(
-    base_url="https://api.groq.com/openai/v1",
-    api_key=os.environ["GROQ_API_KEY"],
-    max_retries=5,   # on a rate-limit error, wait and retry automatically
-    timeout=60,      # give up on a hung request instead of waiting forever
-)
-MODEL = "openai/gpt-oss-120b"
 MAX_STEPS = 15      # safety cap: the agent can never loop forever
 
 SYSTEM_PROMPT = """You are a coding assistant that answers questions about the project in your workspace.
@@ -41,19 +34,16 @@ How to answer:
 - If you could not verify something, say so plainly instead of guessing."""
 
 
-def call_model(messages, log, step, **extra):
-    """One API call, timed and logged."""
-    started = time.time()
-    response = client.chat.completions.create(
-        model=MODEL, messages=messages, tools=TOOL_SCHEMAS, max_completion_tokens=4000, **extra
-    )
-    log.model_call(step, response.usage, time.time() - started, response.choices[0].finish_reason)
+def call_model(llm, messages, log, step, **extra):
+    """One model call, logged."""
+    response, seconds = llm.chat(messages, tools=TOOL_SCHEMAS, **extra)
+    log.model_call(step, response.usage, seconds, response.choices[0].finish_reason)
     return response
 
 
-def run_agent(question, workspace, log=None):
-    log = log or RunLogger(question, MODEL, workspace.root)
-    print(f"Workspace: {workspace.root}")
+def run_agent(question, workspace, llm, log=None):
+    log = log or RunLogger(question, llm.model, workspace.root)
+    print(f"Workspace: {workspace.root} | Model: {llm.model}")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": question},
@@ -63,26 +53,16 @@ def run_agent(question, workspace, log=None):
         for step in range(1, MAX_STEPS + 1):
             # 1. Ask the model what to do next
             try:
-                response = call_model(messages, log, step)
-            except BadRequestError as e:
-                # Some 400 errors mean the MODEL produced malformed output. Retrying usually works.
-                error_text = str(e)
-                if "tool_use_failed" in error_text:
-                    code = "tool_use_failed"
+                response = call_model(llm, messages, log, step)
+            except BadModelOutput as e:
+                # The model produced malformed output. Tell it what went wrong and let it try again.
+                if e.code == "tool_use_failed":
                     note = f"Your last tool call was invalid. Only these tools exist: {', '.join(workspace.tools)}. Try again."
-                elif "output_parse_failed" in error_text:
-                    code = "output_parse_failed"
-                    note = "Your last response could not be read. Reply with either a tool call or your final answer."
                 else:
-                    raise   # a different problem: crash loudly so we notice
-
-                body = e.body if isinstance(e.body, dict) else {}
-                body = body.get("error", body)
-                failed = str(body.get("failed_generation", "(not provided)"))
-                log.api_error(step, code, failed)
-
+                    note = "Your last response could not be read. Reply with either a tool call or your final answer."
+                log.api_error(step, e.code, e.failed_text)
                 print(f"[step {step}] the API rejected the model's output, asking it to try again")
-                print(f"           ✗ {failed[:200]}")
+                print(f"           ✗ {e.failed_text[:200]}")
                 messages.append({"role": "user", "content": note})
                 continue
 
@@ -121,9 +101,9 @@ def run_agent(question, workspace, log=None):
         messages.append({"role": "user", "content": "You have run out of steps. Answer now using only what you have "
                          "already found, with citations, and say clearly what you could not verify."})
         try:
-            response = call_model(messages, log, MAX_STEPS + 1, tool_choice="none")
+            response = call_model(llm, messages, log, MAX_STEPS + 1, tool_choice="none")
             answer = response.choices[0].message.content or f"Stopped after {MAX_STEPS} steps without a final answer."
-        except BadRequestError:
+        except BadModelOutput:
             answer = f"Stopped after {MAX_STEPS} steps without a final answer."
         return finish(log, "step_limit", answer)
 
@@ -144,4 +124,9 @@ def finish(log, outcome, answer):
 if __name__ == "__main__":
     question = sys.argv[1] if len(sys.argv) > 1 else "What does sale_price('bag', 10) return, and is that right?"
     workspace = Workspace(os.environ.get("AGENT_WORKSPACE", Path(__file__).parent / "playground"))
-    print("\nAnswer:\n" + run_agent(question, workspace))
+    llm = LLM(
+        provider=os.environ.get("AGENT_PROVIDER", "groq"),
+        model=os.environ.get("AGENT_MODEL"),          # empty means the provider's default model
+        base_url=os.environ.get("AGENT_BASE_URL"),    # only for servers not in llm.PROVIDERS
+    )
+    print("\nAnswer:\n" + run_agent(question, workspace, llm))
