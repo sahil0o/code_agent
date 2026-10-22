@@ -26,6 +26,7 @@ How to edit:
 - Read the file before editing it, and copy old_text exactly from what you read, without the line-number prefixes.
 - Make small, focused edits: change only what the task needs.
 - If the user rejects an edit, follow their reason instead of retrying the same change.
+- Use create_file only for files that do not exist yet; use edit_file to change existing files.
 
 How to answer:
 - Answer the question first, then give the evidence.

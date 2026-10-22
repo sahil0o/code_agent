@@ -9,6 +9,7 @@ from pathlib import Path
 MAX_RESULT_CHARS = 8000      # cap tool output so one result can't flood the context
 MAX_MATCHES = 50
 READ_CHUNK_CHARS = 7000      # how much of a file one read_file call returns
+MAX_NEW_FILE_CHARS = 100_000 # create_file refuses anything bigger (also keeps approval diffs small enough for the relay)
 
 
 # ---------- Helpers that don't depend on any workspace ----------
@@ -60,6 +61,7 @@ class Workspace:
             "read_file": self.read_file,
             "search": self.search,
             "edit_file": self.edit_file,
+            "create_file": self.create_file,
         }
 
     # ----- safety helpers -----
@@ -166,6 +168,32 @@ class Workspace:
         file.write_text(new_content)
         return f"Edit applied to '{path}'.\n{diff}"
 
+    def create_file(self, path, content):
+        file = self.resolve(path)
+        if file.is_dir() or path.endswith(("/", "\\")):
+            raise ValueError(f"'{path}' is a folder. Give a file name, e.g. 'scripts/plot.py'.")
+        if file.exists():
+            raise ValueError(f"'{path}' already exists. Use edit_file to change an existing file.")
+        if self.is_hidden(file):
+            raise ValueError(f"'{path}' is inside a hidden folder (like .git or .venv). Creating files there is not allowed.")
+        if len(content) > MAX_NEW_FILE_CHARS:
+            raise ValueError(f"content is {len(content)} characters; the limit is {MAX_NEW_FILE_CHARS}. "
+                             f"Create a smaller file.")
+
+        # Show the whole new file as a diff against nothing, so the approval looks like any other edit
+        lines = content.splitlines(keepends=True)
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        diff = "".join(difflib.unified_diff([], lines, fromfile="/dev/null", tofile=f"b/{path}"))
+
+        approved, reason = self.approve(diff)
+        if not approved:
+            return f"The user rejected creating '{path}'. Reason: {reason or 'none given'}. Do not retry the same file."
+        file.parent.mkdir(parents=True, exist_ok=True)          # create missing folders, e.g. scripts/
+        with open(file, "w", encoding="utf-8", newline="") as f: # UTF-8 on every OS; keep \n line endings as written
+            f.write(content)
+        return f"Created '{path}' ({len(lines)} lines)."
+
     # ----- one safe entry point: tools never crash the agent -----
     def run(self, name, arguments_json):
         if name not in self.tools:
@@ -258,6 +286,23 @@ TOOL_SCHEMAS = [
                     "new_text": {"type": "string", "description": "The text to put in its place."},
                 },
                 "required": ["path", "old_text", "new_text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_file",
+            "description": "Create a NEW file with the given content. Fails if the file already exists "
+                           "(use edit_file for existing files). Missing folders are created. "
+                           "The user must approve every new file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "New file path relative to the project root, e.g. 'scripts/plot.py'."},
+                    "content": {"type": "string", "description": "The full text of the new file."},
+                },
+                "required": ["path", "content"],
             },
         },
     },
