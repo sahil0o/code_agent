@@ -100,7 +100,8 @@ class RemoteApprovals:
             self.pending[approval_id] = waiter
         if len(diff_text) > MAX_DIFF_CHARS:
             diff_text = diff_text[:MAX_DIFF_CHARS] + "\n...(diff too long to show in full)"
-        self.relay.send("approval_needed", id=approval_id, diff=diff_text)
+        kind = "command" if diff_text.startswith("Run in ") else "edit"   # so the phone can show the right heading
+        self.relay.send("approval_needed", id=approval_id, diff=diff_text, kind=kind)
         print(f"[worker] waiting for approval {approval_id} from the phone...")
 
         answered = waiter["done"].wait(timeout=APPROVAL_TIMEOUT)

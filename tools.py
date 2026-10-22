@@ -4,12 +4,28 @@ import difflib
 import inspect
 import json
 import re
+import shlex
+import sys
 from pathlib import Path
+
+from runner import LocalRunner
 
 MAX_RESULT_CHARS = 8000      # cap tool output so one result can't flood the context
 MAX_MATCHES = 50
 READ_CHUNK_CHARS = 7000      # how much of a file one read_file call returns
 MAX_NEW_FILE_CHARS = 100_000 # create_file refuses anything bigger (also keeps approval diffs small enough for the relay)
+
+# run_command: which programs may run, and what they really mean. "python" is the SAME Python that runs
+# the agent (your virtual environment), which also works on Windows where "python3" often doesn't exist.
+ALLOWED_PROGRAMS = {
+    "python": [sys.executable],
+    "python3": [sys.executable],
+    "pytest": [sys.executable, "-m", "pytest"],
+}
+SHELL_SYMBOLS = ("&&", "||", "|", ";", ">", "<", "`", "$(")   # meaningless without a shell, so refuse clearly
+DEFAULT_TIMEOUT = 60
+MAX_TIMEOUT = 300
+MAX_OUTPUT_CHARS = 3500      # per stream (stdout / stderr); we keep the END, where errors and summaries are
 
 
 # ---------- Helpers that don't depend on any workspace ----------
@@ -38,7 +54,7 @@ def terminal_approval(diff_text):
     print("\n" + "=" * 60)
     print(diff_text)
     print("=" * 60)
-    answer = input("Apply this edit? [y = yes / anything else = no, optionally with a reason]: ").strip()
+    answer = input("Approve? [y = yes / anything else = no, optionally with a reason]: ").strip()
     if answer.lower() in ("y", "yes"):
         return True, ""
     return False, answer
@@ -51,17 +67,19 @@ def auto_approval(diff_text):
 
 # ---------- One project folder plus the tools that work inside it ----------
 class Workspace:
-    def __init__(self, root, approve=terminal_approval):
+    def __init__(self, root, approve=terminal_approval, runner=None):
         self.root = Path(root).expanduser().resolve()
         if not self.root.is_dir():
             raise ValueError(f"Workspace folder not found: {self.root}")
-        self.approve = approve          # any function: diff_text -> (approved, reason)
+        self.approve = approve          # any function: text to approve -> (approved, reason)
+        self.runner = runner or LocalRunner()   # HOW commands run (later: a Docker sandbox)
         self.tools = {                  # name the model uses -> the method that runs
             "list_dir": self.list_dir,
             "read_file": self.read_file,
             "search": self.search,
             "edit_file": self.edit_file,
             "create_file": self.create_file,
+            "run_command": self.run_command,
         }
 
     # ----- safety helpers -----
@@ -194,6 +212,37 @@ class Workspace:
             f.write(content)
         return f"Created '{path}' ({len(lines)} lines)."
 
+    def run_command(self, command, timeout=DEFAULT_TIMEOUT):
+        # 1. Refuse shell tricks: there is no shell, so "a && b" or "x | y" would not do what the model expects
+        used = [s for s in SHELL_SYMBOLS if s in command]
+        if used:
+            raise ValueError(f"Shell features are not supported ({' '.join(used)}). Run one command at a time, "
+                             f"e.g. 'python plot.py'.")
+        # 2. Split into program + arguments, the way a terminal would (quotes keep spaces together)
+        try:
+            args = shlex.split(command)
+        except ValueError as e:
+            raise ValueError(f"Could not read the command: {e}. Check the quotes.")
+        if not args:
+            raise ValueError("The command is empty.")
+        program = args[0].lower().removesuffix(".exe")
+        if program not in ALLOWED_PROGRAMS:
+            raise ValueError(f"'{args[0]}' is not allowed. Allowed programs: {', '.join(ALLOWED_PROGRAMS)}.")
+        timeout = max(1, min(int(timeout), MAX_TIMEOUT))
+
+        # 3. Ask the human, showing exactly what will run and where
+        approved, reason = self.approve(f"Run in {self.root.name} (timeout {timeout}s):\n$ {command}\n")
+        if not approved:
+            return f"The user rejected running this command. Reason: {reason or 'none given'}. Do not retry the same command."
+
+        # 4. Run it (inside the workspace) and report back what happened
+        result = self.runner.run(ALLOWED_PROGRAMS[program] + args[1:], cwd=self.root, timeout=timeout)
+        if result.timed_out:
+            status = f"Timed out after {timeout}s, so the command was stopped."
+        else:
+            status = f"Exit code: {result.exit_code}" + (" (success)" if result.exit_code == 0 else " (failed)")
+        return f"{status}\n--- stdout ---\n{tail(result.stdout)}\n--- stderr ---\n{tail(result.stderr)}"
+
     # ----- one safe entry point: tools never crash the agent -----
     def run(self, name, arguments_json):
         if name not in self.tools:
@@ -215,6 +264,14 @@ class Workspace:
         if len(result) > MAX_RESULT_CHARS:
             result = result[:MAX_RESULT_CHARS] + f"\n...(truncated, {len(result)} characters in total)"
         return result
+
+
+def tail(text):
+    """Keep the end of long output: that is where tracebacks and test summaries are."""
+    text = text.strip() or "(empty)"
+    if len(text) > MAX_OUTPUT_CHARS:
+        text = f"...({len(text) - MAX_OUTPUT_CHARS} earlier characters cut)\n" + text[-MAX_OUTPUT_CHARS:]
+    return text
 
 
 # ---------- The descriptions the model sees (the same for every workspace) ----------
@@ -303,6 +360,26 @@ TOOL_SCHEMAS = [
                     "content": {"type": "string", "description": "The full text of the new file."},
                 },
                 "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "Run ONE command in the project folder and get its exit code and output. "
+                           "Allowed programs: python, pytest (e.g. 'python plot.py', 'pytest -q', "
+                           "'pytest tests/test_x.py'). No shell features: no &&, |, >, ; . "
+                           "Use forward slashes in paths. The user must approve every command. "
+                           "Use it to check your work: run the script or the tests, read the error, fix, run again.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The command, e.g. 'python plot.py'."},
+                    "timeout": {"type": "integer", "description": f"Seconds before the command is stopped. "
+                                                                  f"Default {DEFAULT_TIMEOUT}, max {MAX_TIMEOUT}."},
+                },
+                "required": ["command"],
             },
         },
     },

@@ -28,6 +28,11 @@ How to edit:
 - If the user rejects an edit, follow their reason instead of retrying the same change.
 - Use create_file only for files that do not exist yet; use edit_file to change existing files.
 
+How to run code:
+- After changing code, check it with run_command: run the script or the relevant tests.
+- If a command fails, read the error output, fix the cause, and run it again. Do not repeat a failing command unchanged.
+- Run one command at a time. Do not start servers or programs that never finish.
+
 How to answer:
 - Answer the question first, then give the evidence.
 - Back every factual claim with a citation like file.py:42 or file.py:40-45, using the line numbers read_file shows.

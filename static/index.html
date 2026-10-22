@@ -211,7 +211,7 @@ const renderers = {
   approval_needed: (e) => {
     const c = card("approval");
     approvalCards[e.id] = c;
-    c.appendChild(el("strong", "", "Approve this edit?"));
+    c.appendChild(el("strong", "", e.kind === "command" ? "Run this command?" : "Approve this edit?"));
     c.appendChild(renderDiff(e.diff));
     const reason = el("input");
     reason.type = "text";
