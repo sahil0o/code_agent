@@ -2,7 +2,12 @@
 
 An AI coding agent built from scratch in Python (no agent frameworks). It explores a codebase, answers questions about it, edits and creates files, and runs code and tests to check its own work. **Every change and every command needs your approval**, from the terminal or **from your phone**.
 
-<!-- Add a 20–30 s demo GIF here: sending a task from the phone, approving an edit, approving a command. Blur the relay URL and QR code. -->
+<p align="center">
+  <img src="docs/1_task.png" width="32%" alt="Sending a task from the phone">
+  <img src="docs/3_approve_command.png" width="32%" alt="Approving a command from the phone">
+  <img src="docs/4_answer.png" width="32%" alt="The agent's answer after running the script">
+</p>
+<p align="center"><em>From the phone: ask for a change → approve the edit and the command → the agent runs the script and reports the result.</em></p>
 
 ## Features
 
@@ -40,17 +45,27 @@ flowchart LR
     PH[Phone browser] -- HTTPS --> RL
 ```
 
-| File | Role |
-|---|---|
-| `agent.py` | `Agent(llm, workspace).run(question)`: the loop, system prompt, retries and step limit |
-| `llm.py` | `LLM(provider, model, base_url)`: one client for every provider; turns provider-specific "bad tool call" errors into one `BadModelOutput` |
-| `tools.py` | `Workspace(root, approve, runner)`: the tools, the path guard, tool schemas, and one safe `run()` entry point |
-| `runner.py` | `LocalRunner`: how commands execute (pluggable, so a Docker runner can be added) |
-| `logger.py` | `RunLogger`: JSON run logs in `runs/` |
-| `eval.py` | Evaluation harness |
-| `worker.py` | Runs on your laptop: connects the agent to the relay, handles phone approvals, workspace and model switching |
-| `relay.py` | FastAPI relay (deployed to Render): passes messages between phone and worker, never runs code |
-| `static/index.html` | The phone page |
+```
+code-agent/
+├── codeagent/            # the agent (runs on your laptop)
+│   ├── agent.py          # Agent(llm, workspace).run(question): the loop, system prompt, retries, step limit
+│   ├── llm.py            # LLM(provider, model, base_url): one client for every provider
+│   ├── tools.py          # Workspace(root, approve, runner): the tools, path guard, tool schemas
+│   ├── runner.py         # LocalRunner: how commands execute (pluggable, ready for a Docker runner)
+│   ├── logger.py         # RunLogger: JSON run logs in runs/
+│   └── worker.py         # connects the agent to the relay; phone approvals, workspace/model switching
+├── relay/                # the server (deployed to Render); passes messages, never runs code
+│   ├── relay.py
+│   ├── static/index.html # the phone page
+│   └── requirements.txt  # fastapi + uvicorn only
+├── evals/                # evaluation harness, tasks and practice repos
+│   ├── eval.py
+│   ├── tasks.json
+│   └── repos/
+├── examples/playground/  # small practice repo to try the agent on
+├── docs/                 # screenshots
+└── requirements.txt      # what the agent needs
+```
 
 Everything the agent needs (which folder, which model, how to approve, how to run commands) is **passed in**, not stored in globals. That makes it possible to run several agents side by side, swap models per run, and test each part on its own.
 
@@ -59,11 +74,11 @@ Everything the agent needs (which folder, which model, how to approve, how to ru
 **Requirements:** Python 3.10+, a Groq API key (free tier works) or any other OpenAI-compatible provider.
 
 ```bash
-git clone https://github.com/sahil0o/code_agent.git
-cd <code_agent>
+git clone https://github.com/<you>/<repo>.git
+cd <repo>
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
-pip install openai python-dotenv httpx qrcode pytest
+pip install -r requirements.txt
 ```
 
 Create a `.env` file in the project folder (it is git-ignored):
@@ -73,26 +88,26 @@ GROQ_API_KEY=your-groq-key
 AGENT_WORKSPACE=/path/to/the/repo/you/want/to/work/on
 ```
 
-Ask a question or give a task:
+Run everything from the project's root folder. Ask a question or give a task:
 
 ```bash
-python agent.py "What does this project do?"
-python agent.py "test_total_value fails. Find the bug, fix it, and run the tests to confirm."
+python -m codeagent.agent "What does this project do?"
+python -m codeagent.agent "test_total_value fails. Find the bug, fix it, and run the tests to confirm."
 ```
 
 Each edit and command is shown first and waits for `y`. Anything else rejects it, and whatever you type is passed to the agent as the reason.
 
-**Windows:** run Python in UTF-8 mode so files with non-English text are read and written correctly: `python -X utf8 agent.py "..."` (or set `PYTHONUTF8=1` once). Use forward slashes in paths in `.env`, e.g. `C:/Users/me/repos/project`.
+**Windows:** run Python in UTF-8 mode so files with non-English text are read and written correctly: `python -X utf8 -m codeagent.agent "..."` (or set `PYTHONUTF8=1` once). Use forward slashes in paths in `.env`, e.g. `C:/Users/me/repos/project`.
 
 ### Choosing a model
 
 ```bash
-AGENT_MODEL=openai/gpt-oss-20b python agent.py "..."                       # another Groq model
-AGENT_PROVIDER=openrouter AGENT_MODEL=<model id> python agent.py "..."     # needs OPENROUTER_API_KEY
-AGENT_PROVIDER=ollama AGENT_MODEL=qwen2.5-coder:7b python agent.py "..."   # local model, no key
+AGENT_MODEL=openai/gpt-oss-20b python -m codeagent.agent "..."                       # another Groq model
+AGENT_PROVIDER=openrouter AGENT_MODEL=<model id> python -m codeagent.agent "..."     # needs OPENROUTER_API_KEY
+AGENT_PROVIDER=ollama AGENT_MODEL=qwen2.5-coder:7b python -m codeagent.agent "..."   # local model, no key
 ```
 
-On Windows PowerShell, set variables first: `$env:AGENT_MODEL="openai/gpt-oss-20b"; python agent.py "..."`.
+On Windows PowerShell, set variables first: `$env:AGENT_MODEL="openai/gpt-oss-20b"; python -m codeagent.agent "..."`.
 
 ## Control it from your phone
 
@@ -114,7 +129,8 @@ sequenceDiagram
 The laptop only makes **outgoing** HTTPS requests, so it works behind home routers and mobile networks (NAT, CGNAT) without opening ports or installing a VPN.
 
 **1. Deploy the relay** (once), e.g. on Render as a free web service:
-- Build command: `pip install -r requirements-relay.txt`
+- Root Directory: `relay` (only that folder is deployed, so changes to the agent don't restart the relay)
+- Build command: `pip install -r requirements.txt`
 - Start command: `uvicorn relay:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"`
 - Environment variable: `RELAY_WORKER_KEY` = a long random secret:
   `python -c "import secrets; print(secrets.token_urlsafe(32))"`
@@ -132,10 +148,15 @@ AGENT_MODELS=small=groq:openai/gpt-oss-20b,local=ollama:qwen2.5-coder:7b
 **3. Start the worker and scan the QR code:**
 
 ```bash
-python worker.py
+python -m codeagent.worker
 ```
 
 The page shows each step, asks for approval of edits and commands, and has dropdowns to switch **workspace** and **model** between tasks. Press Enter in the worker's terminal for a new pairing link (e.g. for another device).
+
+<p align="center">
+  <img src="docs/2_approve_edit.png" width="32%" alt="Approving an edit: the diff is shown before anything changes">
+  <img src="docs/5_model_picker.png" width="32%" alt="Switching models from the phone">
+</p>
 
 ## Safety
 
@@ -157,9 +178,9 @@ The page shows each step, asks for approval of edits and commands, and has dropd
 ## Evaluation
 
 ```bash
-python eval.py                                        # all tasks
-python eval.py --task inv-fix-total-value             # one task
-python eval.py --provider ollama --model qwen2.5-coder:7b   # compare models
+python -m evals.eval                                        # all tasks
+python -m evals.eval --task inv-fix-total-value             # one task
+python -m evals.eval --provider ollama --model qwen2.5-coder:7b   # compare models
 ```
 
 For each task the harness:
@@ -181,7 +202,7 @@ Results (pass/fail, steps, tokens, errors) are printed and saved in `eval_result
 | `AGENT_PROVIDER` | agent | `groq` (default), `openai`, `openrouter`, `ollama` |
 | `AGENT_MODEL` | agent | Model name (default: the provider's default) |
 | `AGENT_BASE_URL` | agent | Any other OpenAI-compatible server |
-| `AGENT_WORKSPACE` | agent, worker | Project folder to work on (default: `playground/`) |
+| `AGENT_WORKSPACE` | agent, worker | Project folder to work on (default: `examples/playground/`) |
 | `AGENT_WORKSPACES` | worker | Folders the phone may switch to: `name=path,name=path` |
 | `AGENT_MODELS` | worker | Models the phone may switch to: `label=provider:model,...` |
 | `RELAY_URL` | worker | Address of your relay |
@@ -203,7 +224,7 @@ Results (pass/fail, steps, tokens, errors) are printed and saved in `eval_result
 
 Testing on real repositories with several models surfaced issues that shaped the design:
 
-- **Guessing instead of exploring.** Asked about "the sensor new half file", one model invented a path (`new/sensor half/Sensor half.py`) and spent three steps narrowing the guess before listing the folder. Error messages that say what to do next made it recover.
+- **Guessing instead of exploring.** Asked about a file by a loose description, one model invented a path (`new/data half/Data half.py`) and spent three steps narrowing the guess before listing the folder. Error messages that say what to do next made it recover.
 - **Picking the wrong tool, then recovering.** A model tried to create a file with `edit_file`; the error led it to `create_file` on the next step.
 - **Long edits fail, short ones succeed.** A multi-line `old_text` retyped from memory did not match; the model re-read the file and succeeded with a short, unique snippet.
 - **Rate limits come from the growing context.** Every step resends the whole conversation, so reading a few file chunks pushed single requests past a 7,000 tokens-per-minute free-tier limit on smaller models.
