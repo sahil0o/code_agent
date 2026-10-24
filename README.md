@@ -74,8 +74,8 @@ Everything the agent needs (which folder, which model, how to approve, how to ru
 **Requirements:** Python 3.10+, a Groq API key (free tier works) or any other OpenAI-compatible provider.
 
 ```bash
-git clone https://github.com/<you>/<repo>.git
-cd <repo>
+git clone https://github.com/sahil0o/code_agent.git
+cd <code_agent>
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
