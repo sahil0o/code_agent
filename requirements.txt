@@ -1,0 +1,12 @@
+# Agent and worker
+openai>=3.33
+python-dotenv>=1.2
+httpx>=0.28
+qrcode>=8.2
+
+# Evals and run_command (running tests)
+pytest>=9.1
+
+# Optional: lets the agent's scripts make plots and read CSVs
+pandas>=2.3
+matplotlib>=3.10
